@@ -1,0 +1,32 @@
+[
+  {
+    "name": "warm_window",
+    "seed": 1001,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. Warm late-afternoon sunlight enters through a large window on the left, casting long soft shadows across a polished concrete floor. The table is brushed stainless steel. The robot is matte white with black joints. Third-person view, static camera, photorealistic, shot on a machine-vision camera."
+  },
+  {
+    "name": "fluorescent_industrial",
+    "seed": 1002,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. Overhead fluorescent panel lighting in an industrial workcell, slightly cool white balance, faint reflections on a scuffed epoxy floor. The table is a worn wooden workbench. The robot is brushed aluminium with visible wear. Third-person view, static camera, photorealistic."
+  },
+  {
+    "name": "low_light_side",
+    "seed": 1003,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. Dim laboratory lighting with a single bright work lamp from the right side, deep shadows on the opposite side of the arm, mild sensor noise and slightly underexposed. Dark grey rubber mat on the table. Third-person view, static camera, photorealistic."
+  },
+  {
+    "name": "cluttered_lab",
+    "seed": 1004,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. Bright even daylight in a busy research laboratory, cardboard boxes and cable spools stacked against the back wall, a metal shelf behind the robot. The table is white laminate with scratches. Third-person view, static camera, photorealistic."
+  },
+  {
+    "name": "warehouse_dusty",
+    "seed": 1005,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. A large warehouse interior, hazy light from high skylights with visible dust in the air, wooden pallets and green plastic crates in the background, dusty concrete floor. Third-person view, static camera, photorealistic."
+  },
+  {
+    "name": "clinical_white",
+    "seed": 1006,
+    "prompt": "A Franka Panda robot arm picks up a red cube from a table and places it down. Clean bright diffuse studio lighting, seamless white backdrop, minimal shadows, high key. The table is a white anodised optical breadboard. Third-person view, static camera, photorealistic."
+  }
+]
