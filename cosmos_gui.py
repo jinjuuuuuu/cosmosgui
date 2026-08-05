@@ -722,11 +722,17 @@ EXAMPLE_AUGS = [
 # fixed by the control video. Each of these changes lighting, surfaces and
 # background while leaving the task itself alone, which is what makes the
 # generated episode still valid against its original action labels.
+#
+# All of them say the cube is on the *floor*, because that is what our depth
+# actually shows: the Isaac Sim scene is a Franka standing on a ground plane
+# with the cube on that same plane. There is no table. Asking for one puts the
+# prompt in a fight with the control geometry, and the control wins — you get a
+# smeared surface where the model tried to satisfy both.
 EXAMPLE_XFERS = [
-    ["A Franka Panda arm picks up a red cube from a stainless steel table. Warm late-afternoon sunlight through a window on the left, long soft shadows, polished concrete floor, brushed aluminium robot. Static third-person camera, photorealistic."],
-    ["A Franka Panda arm picks up a red cube from a worn wooden workbench. Overhead fluorescent panels in an industrial workcell, cool white balance, scuffed epoxy floor. Static third-person camera, photorealistic."],
-    ["A Franka Panda arm picks up a red cube from a white laminate table. Dim laboratory light with one bright work lamp from the right, deep shadows, mild sensor noise, slightly underexposed. Static third-person camera, photorealistic."],
-    ["A Franka Panda arm picks up a red cube from a scratched steel bench in a busy research lab. Bright daylight, cardboard boxes and cable spools against the back wall. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm reaches down to a red cube lying on a polished concrete floor. Warm late-afternoon sunlight from a window on the left, long soft shadows, brushed aluminium robot. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm reaches down to a red cube lying on a scuffed grey epoxy factory floor. Overhead fluorescent panels in an industrial workcell, cool white balance, faint floor markings. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm reaches down to a red cube lying on a dark rubber laboratory floor. Dim room light with one bright work lamp from the right, deep shadows, mild sensor noise, slightly underexposed. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm reaches down to a red cube lying on a pale linoleum floor in a busy research lab. Bright daylight, cardboard boxes and cable spools far in the background. Static third-person camera, photorealistic."],
 ]
 
 with gr.Blocks(title="Cosmos 3") as app:
@@ -864,11 +870,11 @@ with gr.Blocks(title="Cosmos 3") as app:
                 x_prompt = gr.Textbox(
                     label="Target appearance",
                     lines=5,
-                    placeholder="A Franka Panda arm picks up a red cube from a "
-                                "stainless steel table. Warm afternoon sunlight "
-                                "from a window on the left, concrete floor, "
-                                "brushed aluminium robot. Static third-person "
-                                "camera, photorealistic.",
+                    placeholder="A Franka Panda arm reaches down to a red cube "
+                                "lying on a polished concrete floor. Warm afternoon "
+                                "sunlight from a window on the left, brushed "
+                                "aluminium robot. Static third-person camera, "
+                                "photorealistic.",
                 )
                 gr.Examples(label="Variation ideas — one per augmented copy",
                             examples=EXAMPLE_XFERS, inputs=[x_prompt])
