@@ -26,6 +26,15 @@ Environment:
   COSMOS_USERS    required. "user:pass" pairs, comma separated.
   COSMOS_SERVER   vLLM-Omni endpoint (default http://localhost:8000)
   COSMOS_OUT_DIR  where generated mp4s are written (default: system temp dir)
+
+  For the Transfer tab only — the server opens the control video itself rather
+  than receiving an upload, so the file has to be somewhere it can reach:
+  COSMOS_CONTROL_DIR        "/host/dir:/container/dir" — a directory mounted
+                            into the container. Preferred.
+  COSMOS_DOCKER_CONTAINER   container name or id; the control clip is copied in
+                            with `docker cp`. No mount and no restart needed,
+                            but this process needs docker permission.
+  Set neither only if the server shares this filesystem (not containerised).
 """
 
 import base64
@@ -35,6 +44,7 @@ import json
 import mimetypes
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 
@@ -51,6 +61,11 @@ VIDEO_PATH = "/v1/videos/sync"
 # server that runs for weeks. On the workstation point this at /data.
 OUT_DIR = os.environ.get("COSMOS_OUT_DIR") or tempfile.gettempdir()
 os.makedirs(OUT_DIR, exist_ok=True)
+
+# Transfer needs the control clip to be readable by the *server*, not by us.
+# See stage_control() for what these do and why there are two of them.
+CONTROL_DIR = os.environ.get("COSMOS_CONTROL_DIR", "")
+DOCKER_CONTAINER = os.environ.get("COSMOS_DOCKER_CONTAINER", "")
 
 
 def save_meta(path, meta):
@@ -459,6 +474,227 @@ def augment_image(source, prompt, size, count, steps, guidance, seed):
     )
 
 
+def clip_shape(path):
+    """(frames, width, height) of a clip, or (None, None, None).
+
+    Counted by walking the frames rather than read from the container header:
+    this number has to match the action labels exactly, and headers lie often
+    enough that trusting one would corrupt a training set silently.
+    """
+    try:
+        import imageio.v3 as iio
+    except ImportError:
+        return None, None, None
+    n, w, h = 0, None, None
+    try:
+        for fr in iio.imiter(path):
+            if n == 0:
+                h, w = fr.shape[0], fr.shape[1]
+            n += 1
+    except Exception:
+        return None, None, None
+    return (n or None), w, h
+
+
+def control_dirs():
+    """(host dir, container dir) out of COSMOS_CONTROL_DIR.
+
+    Same "host:container" shape as `docker -v`, and as there, no colon means the
+    two are the same path. Split on the *last* colon so a Windows drive letter in
+    the host path is not mistaken for the separator.
+    """
+    if ":" not in CONTROL_DIR:
+        return CONTROL_DIR, CONTROL_DIR
+    host, _, guest = CONTROL_DIR.rpartition(":")
+    return host, (guest or host)
+
+
+def control_bridge_note():
+    """How the control clip will reach the server, in one phrase for the UI.
+
+    Worth showing rather than hiding: if this is wrong the generation fails deep
+    inside the server with a path error, and the cause is not on this page.
+    """
+    if CONTROL_DIR:
+        host, guest = control_dirs()
+        return f"copied into `{host}`, given to the server as `{guest}`"
+    if DOCKER_CONTAINER:
+        return f"`docker cp` into container `{DOCKER_CONTAINER}`"
+    return ("handed over as a plain host path — only correct if the server is not "
+            "in a container. Set COSMOS_CONTROL_DIR or COSMOS_DOCKER_CONTAINER")
+
+
+def stage_control(src):
+    """Put the control clip where the *server* can open it.
+
+    Returns (path to hand the server, how it got there, error).
+
+    This endpoint has no binary upload slot at all — every reference field is a
+    string, and a control video is named by path inside extra_params. When the
+    server runs in a container that path is a container path, so the file has to
+    cross over first. Three ways, in the order to prefer them:
+
+      COSMOS_CONTROL_DIR=/host/dir:/container/dir
+          A directory already mounted into the container. Nothing to install,
+          nothing to restart once the mount exists.
+      COSMOS_DOCKER_CONTAINER=<name|id>
+          docker cp into the running container. Needs neither a mount nor a
+          restart, but this process needs permission to talk to docker.
+      neither
+          Hand over the host path unchanged. Correct only when the server is
+          not containerised, or genuinely shares this filesystem.
+    """
+    name = f"control_{int(time.time())}_{os.path.basename(src)}"
+    if CONTROL_DIR:
+        host_dir, guest_dir = control_dirs()
+        try:
+            os.makedirs(host_dir, exist_ok=True)
+            shutil.copyfile(src, os.path.join(host_dir, name))
+        except Exception as e:
+            # Anything at all here is a misconfigured env var, not a bug worth
+            # crashing a Gradio handler over — the browser would show a stack
+            # trace instead of the one thing the user needs to change.
+            return None, None, (f"Cannot write the control clip into "
+                                f"COSMOS_CONTROL_DIR ({host_dir!r}): {e}")
+        return f"{guest_dir.rstrip('/')}/{name}", f"{host_dir} -> {guest_dir}", None
+
+    if DOCKER_CONTAINER:
+        guest = f"/tmp/{name}"
+        try:
+            cp = subprocess.run(["docker", "cp", src, f"{DOCKER_CONTAINER}:{guest}"],
+                                capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError) as e:
+            return None, None, f"Could not run docker cp: {e}"
+        if cp.returncode != 0:
+            return None, None, (f"docker cp into {DOCKER_CONTAINER} failed:\n"
+                                f"{(cp.stderr or '')[:500]}")
+        return guest, f"docker cp -> {DOCKER_CONTAINER}:{guest}", None
+
+    return os.path.abspath(src), "host path as-is", None
+
+
+def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
+                   steps, guidance, flow_shift, seed, extra_json):
+    """Control-conditioned augmentation: a depth/edge/seg clip in, an RGB clip out.
+
+    Unlike the Augment tab this keeps the geometry *and* the timing of the source
+    episode, so the original action labels stay valid — which is the whole point
+    when the output goes back into a policy training set.
+
+    The control clip is not uploaded. It is named by path inside extra_params:
+        extra_params={"depth": {"control_path": "/...", "control_weight": 1.0}, ...}
+    which is how this build takes transfer hints. See stage_control().
+    """
+    if not control:
+        return None, "Upload a control video (depth / edge / segmentation) first."
+    if not prompt.strip():
+        return None, "Describe what the scene should look like."
+
+    n, w, h = clip_shape(control)
+    if not n:
+        return None, ("Could not read that control video. Frame counting needs "
+                      "imageio (pip install imageio imageio-ffmpeg), and the clip "
+                      "must be a codec it can decode — re-encode as h264 mp4 if "
+                      "in doubt (make_control.py writes h264).")
+    # The model works in multiples of 16; trimming is safer than padding because
+    # padding would move the image content relative to the control geometry.
+    size = f"{w - w % 16}x{h - h % 16}"
+
+    server_path, how, err = stage_control(control)
+    if err:
+        return None, err
+
+    form = {
+        "model": "nvidia/Cosmos3-Nano",
+        "prompt": prompt,
+        "size": size,
+        # Locked to the control clip on purpose. Any other value desynchronises
+        # the output from the action trajectory it is supposed to pair with.
+        "num_frames": str(n),
+        # Must match the source episode, not the 24 the other tabs use. Our
+        # LeRobot episodes are 60Hz recorded and strided by 3, so 20.
+        "fps": str(int(fps)),
+        "num_inference_steps": str(int(steps)),
+        "guidance_scale": str(float(guidance)),
+        "flow_shift": str(float(flow_shift)),
+        "seed": str(int(seed)),
+        "generate_sound": "false",   # transfer is video-only; sound is rejected
+    }
+    if negative.strip():
+        form["negative_prompt"] = negative
+
+    extra = {
+        control_type: {"control_path": server_path,
+                       "control_weight": float(weight)},
+        "max_frames": n,
+        "resolution": str(h - h % 16),
+        "num_video_frames_per_chunk": int(chunk),
+        # Keep the server from substituting its own resolution/duration, which
+        # would change the frame count and break the label alignment above.
+        "use_resolution_template": False,
+        "use_duration_template": False,
+    }
+    if extra_json.strip():
+        try:
+            extra.update(json.loads(extra_json))
+        except ValueError as e:
+            return None, f"extra_params overrides are not valid JSON: {e}"
+
+    form["extra_params"] = json.dumps(extra)
+
+    t0 = time.monotonic()
+    content, served, err = post_video(form, None)
+    if err:
+        return None, (f"{err}\n\nControl was handed over as: {server_path} ({how}).\n"
+                      "If the server says it cannot read that path, it is looking "
+                      "at its own filesystem — set COSMOS_CONTROL_DIR or "
+                      "COSMOS_DOCKER_CONTAINER (see the tab notes).")
+
+    path = os.path.join(OUT_DIR, f"cosmos_xfer_{int(time.time())}_{int(seed)}.mp4")
+    with open(path, "wb") as f:
+        f.write(content)
+    took = time.monotonic() - t0
+
+    out_n, out_w, out_h = clip_shape(path)
+    kept = keep_input(path, control)
+    save_meta(path, {
+        "kind": f"video transfer ({control_type})",
+        "prompt": prompt,
+        "negative_prompt": negative.strip() or None,
+        "control_video": os.path.basename(kept) if kept else None,
+        "control_type": control_type,
+        "control_weight": float(weight),
+        "control_path_on_server": server_path,
+        "size": size,
+        "num_frames": n,
+        "frames_returned": out_n,
+        "fps": int(fps),
+        "num_video_frames_per_chunk": int(chunk),
+        "num_inference_steps": int(steps),
+        "guidance_scale": float(guidance),
+        "flow_shift": float(flow_shift),
+        "seed": int(seed),
+        "gpu_seconds": round(served, 1) if served else None,
+        "round_trip_seconds": round(took, 1),
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+    timing = f"{served:.0f}s on the GPU ({took:.0f}s total)" if served else f"{took:.0f}s"
+    # A frame count that came back different is the one failure that does real
+    # damage downstream, so say it loudly rather than burying it in the json.
+    warn = ""
+    if out_n and out_n != n:
+        warn = (f"\n\n[!] Asked for {n} frames, got {out_n}. The action labels no "
+                f"longer line up — do not train on this clip. Try setting "
+                f"num_video_frames_per_chunk to {n} if it fits, or report the "
+                f"mismatch before augmenting the rest.")
+    return path, (
+        f"Done in {timing}. {n} frames at {size}, {control_type} control "
+        f"(weight {weight}), seed {int(seed)}.\n"
+        f"Control handed over as {server_path} ({how}).\nSaved to {path}{warn}"
+    )
+
+
 SIZES = ["832x480", "1280x720", "1024x1024", "1920x1080"]
 MATCH_SOURCE = "Match source image"
 SIZES_WITH_MATCH = [MATCH_SOURCE] + SIZES
@@ -480,6 +716,17 @@ EXAMPLE_AUGS = [
     ["The camera pans slowly to the right across the same scene."],
     ["The forklift edges forward while everything else stays still."],
     ["The scene stays put while the light shifts across the floor."],
+]
+
+# Transfer prompts describe the *look*, not the motion — the motion is already
+# fixed by the control video. Each of these changes lighting, surfaces and
+# background while leaving the task itself alone, which is what makes the
+# generated episode still valid against its original action labels.
+EXAMPLE_XFERS = [
+    ["A Franka Panda arm picks up a red cube from a stainless steel table. Warm late-afternoon sunlight through a window on the left, long soft shadows, polished concrete floor, brushed aluminium robot. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm picks up a red cube from a worn wooden workbench. Overhead fluorescent panels in an industrial workcell, cool white balance, scuffed epoxy floor. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm picks up a red cube from a white laminate table. Dim laboratory light with one bright work lamp from the right, deep shadows, mild sensor noise, slightly underexposed. Static third-person camera, photorealistic."],
+    ["A Franka Panda arm picks up a red cube from a scratched steel bench in a busy research lab. Bright daylight, cardboard boxes and cable spools against the back wall. Static third-person camera, photorealistic."],
 ]
 
 with gr.Blocks(title="Cosmos 3") as app:
@@ -595,6 +842,70 @@ with gr.Blocks(title="Cosmos 3") as app:
             concurrency_id="gpu",
         )
 
+    with gr.Tab("Transfer"):
+        gr.Markdown(
+            "Domain randomisation for an episode you already have. Upload the "
+            "**control** video — depth, edges or segmentation, built with "
+            "`make_control.py` — and describe the look you want. The motion and "
+            "the geometry stay exactly as they were, so the original action "
+            "labels remain valid.\n\n"
+            "Frames and resolution follow the control clip and are not adjustable "
+            "here, on purpose: changing either one desynchronises the result from "
+            "the action trajectory it has to pair with.\n\n"
+            f"The server opens the control file itself, so it must be reachable "
+            f"from the server's own filesystem — currently "
+            f"**{control_bridge_note()}**."
+        )
+        with gr.Row():
+            with gr.Column():
+                x_ctrl = gr.Video(label="Control video (depth / edge / segmentation)")
+                x_type = gr.Radio(["depth", "edge", "seg", "blur", "wsm"],
+                                  value="depth", label="What kind of control is it")
+                x_prompt = gr.Textbox(
+                    label="Target appearance",
+                    lines=5,
+                    placeholder="A Franka Panda arm picks up a red cube from a "
+                                "stainless steel table. Warm afternoon sunlight "
+                                "from a window on the left, concrete floor, "
+                                "brushed aluminium robot. Static third-person "
+                                "camera, photorealistic.",
+                )
+                gr.Examples(label="Variation ideas — one per augmented copy",
+                            examples=EXAMPLE_XFERS, inputs=[x_prompt])
+                x_negative = gr.Textbox(
+                    label="Negative prompt", lines=2,
+                    value="blurry, distorted, low quality, jittery, deformed, warped geometry",
+                )
+                x_weight = gr.Slider(0.1, 2.0, value=1.0, step=0.1,
+                                     label="Control weight (how strictly to follow the geometry)")
+                x_fps = gr.Slider(8, 30, value=20, step=1,
+                                  label="FPS — must match the source episode (ours is 20)")
+                x_chunk = gr.Slider(17, 121, value=93, step=4,
+                                    label="Frames per chunk (93 is what the paper used)")
+                x_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
+                x_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
+                x_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="Flow shift")
+                x_seed = gr.Number(value=0, precision=0, label="Seed")
+                x_extra = gr.Textbox(
+                    label="extra_params overrides (JSON, optional)",
+                    lines=2,
+                    placeholder='{"guardrails": false}',
+                    info="Merged over what this tab builds. The escape hatch for "
+                         "keys this build wants that we do not know about yet.",
+                )
+                x_go = gr.Button("Generate augmented video", variant="primary")
+            with gr.Column():
+                x_out = gr.Video(label="Augmented result")
+                x_log = gr.Textbox(label="Status", lines=8, interactive=False)
+
+        x_event = x_go.click(
+            transfer_video,
+            inputs=[x_ctrl, x_prompt, x_negative, x_type, x_weight, x_fps, x_chunk,
+                    x_steps, x_guidance, x_shift, x_seed, x_extra],
+            outputs=[x_out, x_log],
+            concurrency_id="gpu",
+        )
+
     with gr.Tab("History"):
         gr.Markdown(
             "Everything generated on this server, newest first. Each result has "
@@ -619,6 +930,7 @@ with gr.Blocks(title="Cosmos 3") as app:
     v_event.then(refresh_history, outputs=h_pick)
     i_event.then(refresh_history, outputs=h_pick)
     a_event.then(refresh_history, outputs=h_pick)
+    x_event.then(refresh_history, outputs=h_pick)
 
     # Checked on every page load, not once at startup — otherwise everyone who
     # opens the page sees whatever was true when this script happened to start.
