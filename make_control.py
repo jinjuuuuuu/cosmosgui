@@ -124,14 +124,45 @@ def even(v):
 
 
 def write_video(frames, out, fps):
+    """h264 mp4, with whichever imageio video backend this machine has.
+
+    imageio v3 dispatches to pyav when the `av` package is importable and to
+    imageio-ffmpeg otherwise, and the two spell the same two things differently:
+    pyav takes out_pixel_format and has no way to pass encoder flags through
+    imwrite at all, while imageio-ffmpeg takes pixelformat plus output_params.
+    Asking for the wrong one is a TypeError, so try both.
+
+    imageio-ffmpeg goes first because it is the one that accepts -crf. Quality is
+    not cosmetic here: the depth silhouettes are the geometry signal Cosmos reads,
+    and default-quality h264 rings around exactly those edges.
+    """
     import imageio.v3 as iio
-    first = frames[0]
-    h, w = first.shape[:2]
+    arr = np.stack(frames)
+    h, w = arr.shape[1:3]
     if (h, w) != (even(h), even(w)):
         sys.exit(f"Frame size {w}x{h} is odd; crop or resize to even dimensions.")
-    iio.imwrite(out, np.stack(frames), fps=fps, codec="libx264",
-                pixelformat="yuv420p", output_params=["-crf", "12"])
-    print(f"wrote {out}  ({len(frames)} frames, {w}x{h}, {fps}fps)")
+
+    attempts = [
+        ("FFMPEG", dict(fps=fps, codec="libx264", pixelformat="yuv420p",
+                        output_params=["-crf", "12"])),
+        ("pyav", dict(fps=fps, codec="libx264", out_pixel_format="yuv420p")),
+    ]
+    problems = []
+    for plugin, kw in attempts:
+        try:
+            iio.imwrite(out, arr, plugin=plugin, **kw)
+        except Exception as e:
+            problems.append(f"{plugin}: {type(e).__name__}: {e}")
+            continue
+        note = "" if plugin == "FFMPEG" else (
+            "  [!] pyav cannot take -crf through imwrite, so this used the "
+            "encoder default. For near-lossless control videos: pip install "
+            "imageio-ffmpeg")
+        print(f"wrote {out}  ({len(frames)} frames, {w}x{h}, {fps}fps, via {plugin}){note}")
+        return
+    sys.exit("Could not write the mp4 with either video backend:\n  "
+             + "\n  ".join(problems)
+             + "\nInstall one:  pip install imageio-ffmpeg   (or)  pip install av")
 
 
 def frame_files(d, exts):
@@ -211,9 +242,15 @@ def main():
 
     if not frames:
         sys.exit("No frames produced.")
-    if len(frames) > 300:
-        print(f"note: {len(frames)} frames. 720p transfer is limited to ~300; "
-              f"drop the resolution, lower the fps, or split the episode.")
+    if len(frames) > 121:
+        # Not a problem to fix here: transfer generates in chunks, so a long
+        # control clip is normal (the paper uses 93 frames per chunk on episodes
+        # longer than this). Splitting the episode would be the *wrong* fix — it
+        # is the frame count matching the action labels that has to be preserved.
+        print(f"note: {len(frames)} frames, longer than one chunk (121 max). "
+              f"Transfer will generate this in chunks — set "
+              f"num_video_frames_per_chunk in the GUI's Transfer tab (93 is what "
+              f"the paper used). Do not split the episode to make it fit.")
     write_video(frames, args.out, args.fps)
     print("Frame count must stay identical to the RGB episode so the LeRobot "
           "action labels still line up.")
