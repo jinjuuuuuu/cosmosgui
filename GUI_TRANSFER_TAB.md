@@ -118,6 +118,68 @@ docker run ... -v /data/jinju/cosmos_ctrl:/cosmos_ctrl ... vllm/vllm-omni:cosmos
 그래도 돌아온 프레임 수가 다르면 상태창에 `do not train on this clip` 경고를 띄운다.
 조용히 넘어가면 증강 데이터가 오염된 채로 학습에 들어간다.
 
+## extra_params가 실제로 받는 필드
+
+컨테이너의 `vllm_omni/diffusion/models/cosmos3/transfer.py`가 유일한 근거다.
+**이 dataclass에 없는 키는 예외 없이 조용히 버려진다.**
+
+```python
+@dataclass
+class Cosmos3TransferConfig:
+    hints: dict[str, Cosmos3TransferHint]
+    guidance_scale: float | None = None
+    control_guidance: float = 1.0
+    control_guidance_interval: tuple[float, float] | None = None
+    flow_shift: float | None = None
+    num_video_frames_per_chunk: int = 93
+    num_conditional_frames: int = 1
+    max_frames: int = 5000
+    show_control_condition: bool = False
+    show_input: bool = False
+    num_first_chunk_conditional_frames: int = 0
+    share_vision_temporal_positions: bool = True
+    num_frames: int | None = None
+    fps: float | None = None
+
+@dataclass
+class Cosmos3TransferHint:
+    key: str
+    control_path: str | None = None
+    control: Any | None = None
+    preset_edge_threshold: str = "medium"
+    preset_blur_strength: str = "medium"
+```
+
+힌트 종류별 권장값(`TRANSFER_DEFAULTS`):
+
+| hint | guidance_scale | control_guidance | flow_shift |
+|---|---|---|---|
+| edge / blur / depth | 3.0 | 1.5 | 10.0 |
+| seg | 3.0 | 2.0 | 10.0 |
+| wsm | 1.0 | 3.0 | 10.0 (num_frames 101, fps 10, chunk 101) |
+
+**`control_weight`는 존재하지 않는다.** 이전 판의 이 탭은 그 이름을 힌트 안에 넣고
+있었고, 아무 일도 하지 않았다 — 그 값만 1.8과 1.0으로 바꾼 두 실행이 **md5까지 같은**
+파일을 냈다(각각 1087초/1084초를 실제로 태우고서). 세기를 조절하는 건
+**`control_guidance`이고 최상위 필드**다.
+
+그리고 `guidance_scale`은 다른 탭에서 물려받은 6.0을 쓰고 있었는데, transfer의
+권장값은 **3.0**이다.
+
+### 측정된 결함 두 개가 이 기본값들로 설명된다
+
+- `num_conditional_frames = 1` — 다음 chunk가 이전 chunk를 **1프레임만** 보고 시작한다.
+  chunk 경계에서 밝기가 계단식으로 갈아타는 원인. 357프레임/chunk 93에서 프레임 185의
+  밝기 변화가 평소의 9.8배였고, chunk를 121로 바꾸자 그 계단이 245로 **따라 움직였다**.
+- `num_first_chunk_conditional_frames = 0` — 첫 chunk는 참조가 아예 없다. 프레임 1~9의
+  밝기 요동(최대 33.6배)이 여기서 온다. 학습에 쓸 때 앞 10프레임은 잘라내는 게 안전하다.
+
+### 여러 힌트를 동시에 줄 수 있다
+
+`ordered_hints`가 `TRANSFER_HINT_KEYS` 순서로 여러 힌트를 돌려주므로 depth + seg 병용이
+가능하다(`next(iter(hints))`는 기본값을 어느 힌트에서 가져올지 고르는 데만 쓴다).
+깊이 대비가 약한 물체는 seg를 함께 주는 게 답일 수 있다.
+
 ## control 비디오는 어디서 오나
 
 `pickplace` repo(`~/pickplace`)에서:

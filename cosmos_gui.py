@@ -573,8 +573,8 @@ def stage_control(src):
     return os.path.abspath(src), "host path as-is", None
 
 
-def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
-                   steps, guidance, flow_shift, seed, extra_json):
+def transfer_video(control, prompt, negative, control_type, control_guidance, fps,
+                   chunk, cond_frames, steps, guidance, flow_shift, seed, extra_json):
     """Control-conditioned augmentation: a depth/edge/seg clip in, an RGB clip out.
 
     Unlike the Augment tab this keeps the geometry *and* the timing of the source
@@ -623,14 +623,25 @@ def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
     if negative.strip():
         form["negative_prompt"] = negative
 
+    # Field names come from Cosmos3TransferConfig in the container
+    # (vllm_omni/diffusion/models/cosmos3/transfer.py). Anything not on that
+    # dataclass is silently dropped — an earlier version of this tab sent
+    # "control_weight" inside the hint and it did nothing at all: two runs that
+    # differed only in that value came back byte-identical.
     extra = {
-        control_type: {"control_path": server_path,
-                       "control_weight": float(weight)},
+        control_type: {"control_path": server_path},
+        # The real name for how hard to hold onto the control geometry.
+        "control_guidance": float(control_guidance),
+        # How many frames of the previous chunk the next one gets to see. The
+        # default of 1 is why the brightness steps across a chunk boundary.
+        "num_conditional_frames": int(cond_frames),
         "max_frames": n,
         "resolution": str(h - h % 16),
         "num_video_frames_per_chunk": int(chunk),
         # Keep the server from substituting its own resolution/duration, which
         # would change the frame count and break the label alignment above.
+        # (Not on the transfer dataclass, so possibly ignored — the server has
+        # been returning 1104x832 for a 960x720 request either way.)
         "use_resolution_template": False,
         "use_duration_template": False,
     }
@@ -676,7 +687,8 @@ def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
         "negative_prompt": negative.strip() or None,
         "control_video": os.path.basename(kept) if kept else None,
         "control_type": control_type,
-        "control_weight": float(weight),
+        "control_guidance": float(control_guidance),
+        "num_conditional_frames": int(cond_frames),
         "control_path_on_server": server_path,
         "size": size,
         "num_frames": n,
@@ -703,7 +715,8 @@ def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
                 f"mismatch before augmenting the rest.")
     return path, (
         f"Done in {timing}. {n} frames at {size}, {control_type} control "
-        f"(weight {weight}), seed {int(seed)}.\n"
+        f"(control_guidance {control_guidance}, {cond_frames} conditional "
+        f"frame(s) per chunk), seed {int(seed)}.\n"
         f"Control handed over as {server_path} ({how}).\nSaved to {path}{warn}"
     )
 
@@ -895,14 +908,22 @@ with gr.Blocks(title="Cosmos 3") as app:
                     label="Negative prompt", lines=2,
                     value="blurry, distorted, low quality, jittery, deformed, warped geometry",
                 )
-                x_weight = gr.Slider(0.1, 2.0, value=1.0, step=0.1,
-                                     label="Control weight (how strictly to follow the geometry)")
+                x_cguidance = gr.Slider(
+                    0.5, 4.0, value=1.5, step=0.1,
+                    label="Control guidance — how hard to hold the geometry (depth default 1.5)")
                 x_fps = gr.Slider(8, 30, value=20, step=1,
                                   label="FPS — must match the source episode (ours is 20)")
-                x_chunk = gr.Slider(17, 121, value=93, step=4,
-                                    label="Frames per chunk (93 is what the paper used)")
+                x_chunk = gr.Slider(17, 121, value=121, step=4,
+                                    label="Frames per chunk (121 measured cleaner than 93 here)")
+                x_cond = gr.Slider(
+                    1, 16, value=1, step=1,
+                    label="Conditional frames per chunk — how much of the previous "
+                          "chunk the next one sees (server default 1)",
+                    info="The brightness step at a chunk boundary comes from this "
+                         "being 1. Raising it is the lever to try.")
                 x_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
-                x_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
+                x_guidance = gr.Slider(1.0, 12.0, value=3.0, step=0.5,
+                                       label="Guidance scale (transfer default is 3.0, not 6.0)")
                 x_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="Flow shift")
                 x_seed = gr.Number(value=0, precision=0, label="Seed")
                 x_extra = gr.Textbox(
@@ -919,8 +940,8 @@ with gr.Blocks(title="Cosmos 3") as app:
 
         x_event = x_go.click(
             transfer_video,
-            inputs=[x_ctrl, x_prompt, x_negative, x_type, x_weight, x_fps, x_chunk,
-                    x_steps, x_guidance, x_shift, x_seed, x_extra],
+            inputs=[x_ctrl, x_prompt, x_negative, x_type, x_cguidance, x_fps,
+                    x_chunk, x_cond, x_steps, x_guidance, x_shift, x_seed, x_extra],
             outputs=[x_out, x_log],
             concurrency_id="gpu",
         )
