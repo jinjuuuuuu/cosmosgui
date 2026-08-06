@@ -41,7 +41,38 @@ extra_params={"depth": {"control_path": "/서버가/읽을/경로.mp4",
 찾는 `control_field()`를 두라고 적어놨었다. 이 빌드에서는 binary 필드가 하나도 없어서
 그 함수는 항상 `None`을 반환한다 — 그 패치는 폐기됐고, `post_video()`는 손대지 않았다.
 
-## 경로 브릿지 — 실제로 걸리는 유일한 문제
+## 서버의 생성 마감시간 — 긴 클립은 반드시 걸린다
+
+`/v1/videos/sync`는 기본 **600초**가 지나면 504로 끊는다. 93프레임은 통과하지만
+357프레임(17초 에피소드)은 넘긴다. 클라이언트의 `TIMEOUT`(3600s)과는 무관하다.
+
+값은 컨테이너 안의 이 한 줄이 정한다
+(`vllm_omni/entrypoints/openai/api_server.py:2880`):
+
+```python
+VIDEO_SYNC_TIMEOUT_S = float(os.environ.get("VLLM_OMNI_VIDEO_SYNC_TIMEOUT", 600.0))
+```
+
+**`VLLM_OMNI_VIDEO_SYNC_TIMEOUT` — `OMNI`가 들어간다.** 검색하면 `VLLM_VIDEO_SYNC_TIMEOUT`
+이라고 나오는 글이 여럿 있는데 그 이름으로는 아무 일도 일어나지 않는다(값은 컨테이너
+env에 얌전히 앉아 있고 서버는 계속 600초에 끊는다). 소스가 유일한 근거다.
+
+서버를 이 변수와 함께 띄운다:
+
+```
+docker run -d --name cosmos-server ... \
+  -e VLLM_OMNI_VIDEO_SYNC_TIMEOUT=7200 \
+  ... vllm serve nvidia/Cosmos3-Nano --omni ...
+```
+
+환경변수라 값을 바꾸려면 컨테이너를 다시 만들어야 한다. 모델 캐시가 볼륨에 있으면
+재다운로드는 없다.
+
+배치로 수십 편을 돌릴 거라면 비동기 경로(`POST /v1/videos` → `GET /v1/videos/{id}`
+폴링 → `/content`)가 구조적으로 맞다. 동기 요청을 10분 넘게 붙잡고 있으면 네트워크가
+한 번 끊길 때마다 그 생성분이 날아간다. 아직 구현하지 않았다.
+
+## 경로 브릿지
 
 서버가 파일을 **직접 열기** 때문에, GUI가 받은 업로드는 서버가 볼 수 있는 곳으로
 건너가야 한다. 서버가 컨테이너 안에 있으면 그 경로는 **컨테이너 내부 경로**다.
