@@ -645,10 +645,23 @@ def transfer_video(control, prompt, negative, control_type, weight, fps, chunk,
     t0 = time.monotonic()
     content, served, err = post_video(form, None)
     if err:
-        return None, (f"{err}\n\nControl was handed over as: {server_path} ({how}).\n"
-                      "If the server says it cannot read that path, it is looking "
-                      "at its own filesystem — set COSMOS_CONTROL_DIR or "
-                      "COSMOS_DOCKER_CONTAINER (see the tab notes).")
+        hint = f"\n\nControl was handed over as: {server_path} ({how})."
+        low = err.lower()
+        if "timed out" in low or "timeout" in low:
+            # The server enforces its own generation deadline (default 600s),
+            # which is separate from the TIMEOUT this client waits. Pointing at
+            # the control path here would send someone chasing the wrong thing.
+            hint += (
+                f"\nThat is the server's deadline, not this client's — the "
+                f"control path was fine. {n} frames at {int(steps)} steps did not "
+                f"finish in time. Lower the steps to get under it, or restart the "
+                f"server with a bigger VLLM_VIDEO_SYNC_TIMEOUT (default 600s).")
+        else:
+            hint += (
+                "\nIf the server says it cannot read that path, it is looking at "
+                "its own filesystem — set COSMOS_CONTROL_DIR or "
+                "COSMOS_DOCKER_CONTAINER (see the tab notes).")
+        return None, err + hint
 
     path = os.path.join(OUT_DIR, f"cosmos_xfer_{int(time.time())}_{int(seed)}.mp4")
     with open(path, "wb") as f:
