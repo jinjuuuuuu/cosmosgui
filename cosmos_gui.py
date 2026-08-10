@@ -126,6 +126,9 @@ def recent_choices(limit=40):
         if not p.endswith(".json")
         and "_input." not in os.path.basename(p)
         and "_frame" not in os.path.basename(p)
+        # n>1 on the image endpoint returns siblings of one run; only the
+        # first carries the metadata, so the rest stay out of the list.
+        and "_alt" not in os.path.basename(p)
     ]
     files.sort(key=os.path.getmtime, reverse=True)
     choices = []
@@ -225,13 +228,17 @@ def server_seconds(r):
         return None
 
 
-def make_image(prompt, negative, size, steps, guidance, flow_shift, seed):
+def make_image(prompt, negative, size, steps, guidance, flow_shift, seed,
+               count, system_prompt):
     if not prompt.strip():
         return None, "Enter a prompt first."
+    count = int(count)
     payload = {
         "prompt": prompt,
         "size": size,
-        "n": 1,
+        # The schema caps this at 10. One request for ten samples beats ten
+        # requests: the queue is serial, so each round trip costs a full wait.
+        "n": count,
         "num_inference_steps": int(steps),
         "guidance_scale": float(guidance),
         "flow_shift": float(flow_shift),
@@ -239,6 +246,10 @@ def make_image(prompt, negative, size, steps, guidance, flow_shift, seed):
     }
     if negative.strip():
         payload["negative_prompt"] = negative
+    # Omitted entirely when left on the server default — sending a guess here
+    # is how you get a 422 that looks like a model problem.
+    if system_prompt and system_prompt != SYSTEM_PROMPT_DEFAULT:
+        payload["use_system_prompt"] = system_prompt
     t0 = time.monotonic()
     try:
         r = requests.post(f"{SERVER}{IMAGE_PATH}", json=payload, timeout=TIMEOUT)
@@ -249,21 +260,32 @@ def make_image(prompt, negative, size, steps, guidance, flow_shift, seed):
         return None, explain_error(r, IMAGE_PATH)
 
     try:
-        b64 = r.json()["data"][0]["b64_json"]
-    except (KeyError, IndexError, ValueError):
+        data = r.json()["data"]
+        imgs = [Image.open(io.BytesIO(base64.b64decode(d["b64_json"]))) for d in data]
+    except (KeyError, IndexError, TypeError, ValueError):
         return None, f"Unexpected response shape:\n{r.text[:1500]}"
+    if not imgs:
+        return None, "The server returned no images."
 
-    img = Image.open(io.BytesIO(base64.b64decode(b64)))
     took = time.monotonic() - t0
     served = server_seconds(r)
 
-    path = os.path.join(OUT_DIR, f"cosmos_img_{int(time.time())}_{int(seed)}.png")
-    img.save(path)
-    save_meta(path, {
+    # The first file is the run; the rest are its siblings and are kept out of
+    # the History list by the _alt tag.
+    stem = os.path.join(OUT_DIR, f"cosmos_img_{int(time.time())}_{int(seed)}")
+    paths = []
+    for i, img in enumerate(imgs):
+        p = f"{stem}.png" if i == 0 else f"{stem}_alt{i + 1:02d}.png"
+        img.save(p)
+        paths.append(p)
+
+    save_meta(paths[0], {
         "kind": "image",
         "prompt": prompt,
         "negative_prompt": negative.strip() or None,
         "size": size,
+        "n": len(imgs),
+        "use_system_prompt": payload.get("use_system_prompt"),
         "num_inference_steps": int(steps),
         "guidance_scale": float(guidance),
         "flow_shift": float(flow_shift),
@@ -273,9 +295,11 @@ def make_image(prompt, negative, size, steps, guidance, flow_shift, seed):
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
     timing = f"{served:.0f}s on the GPU ({took:.0f}s total)" if served else f"{took:.0f}s"
-    return img, (
-        f"Done in {timing}. {img.width}x{img.height}, seed {int(seed)}.\n"
-        f"Saved to {path}"
+    first = imgs[0]
+    note = "" if len(imgs) == count else f" (asked for {count}, got {len(imgs)})"
+    return paths, (
+        f"Done in {timing}. {len(imgs)} image(s){note}, {first.width}x{first.height}, "
+        f"seed {int(seed)}.\nSaved to {paths[0]}"
     )
 
 
@@ -725,6 +749,21 @@ SIZES = ["832x480", "1280x720", "1024x1024", "1920x1080"]
 MATCH_SOURCE = "Match source image"
 SIZES_WITH_MATCH = [MATCH_SOURCE] + SIZES
 
+# The server can rewrite a short prompt into a fuller one before generating.
+# Names come from the use_system_prompt enum in /openapi.json; "custom" is left
+# out because it only works if the server was launched with that flag and a
+# system prompt of its own. The first entry means "send nothing".
+SYSTEM_PROMPT_DEFAULT = "(server default)"
+SYSTEM_PROMPTS = [
+    SYSTEM_PROMPT_DEFAULT,
+    "None",
+    "dynamic",
+    "en_vanilla",
+    "en_recaption",
+    "en_think_recaption",
+    "en_unified",
+]
+
 # A blank prompt box is where people give up. These are deliberately concrete —
 # one subject, one motion, one lighting cue — which is what this model wants.
 EXAMPLE_PROMPTS = [
@@ -825,6 +864,17 @@ with gr.Blocks(title="Cosmos 3") as app:
                     placeholder="A warehouse robot arm picking up a blue box, industrial lighting.",
                 )
                 i_negative = gr.Textbox(label="Negative prompt", lines=2)
+                i_count = gr.Slider(
+                    1, 10, value=1, step=1,
+                    label="How many images (n)",
+                    info="One request, several samples. The queue is serial, so "
+                         "this is much faster than pressing the button n times.")
+                i_system = gr.Dropdown(
+                    SYSTEM_PROMPTS, value=SYSTEM_PROMPT_DEFAULT,
+                    label="Prompt rewriting (use_system_prompt)",
+                    info="The server can expand a short prompt before generating. "
+                         "en_recaption is the one to try first; leave on the "
+                         "default to send nothing.")
                 i_size = gr.Dropdown(SIZES, value="1280x720", label="Resolution")
                 i_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
                 i_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
@@ -832,12 +882,14 @@ with gr.Blocks(title="Cosmos 3") as app:
                 i_seed = gr.Number(value=0, precision=0, label="Seed")
                 i_go = gr.Button("Generate image", variant="primary")
             with gr.Column():
-                i_out = gr.Image(label="Result", type="pil", interactive=False)
+                # A gallery rather than a single image, because n can be >1.
+                i_out = gr.Gallery(label="Result", columns=2, height=430)
                 i_log = gr.Textbox(label="Status", lines=6, interactive=False)
 
         i_event = i_go.click(
             make_image,
-            inputs=[i_prompt, i_negative, i_size, i_steps, i_guidance, i_shift, i_seed],
+            inputs=[i_prompt, i_negative, i_size, i_steps, i_guidance, i_shift,
+                    i_seed, i_count, i_system],
             outputs=[i_out, i_log],
             concurrency_id="gpu",
         )
