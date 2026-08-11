@@ -241,6 +241,9 @@ def main():
     p.add_argument("--domain-id", type=int, default=None, help="numeric domain instead of a name")
     p.add_argument("--raw-action-dim", type=int, default=8,
                    help="how many of the 64 slots are real for this robot (default 8)")
+    p.add_argument("--chunk", type=int, default=None,
+                   help="action_chunk_size; must be num_frames or num_frames-1 "
+                        "(default: num_frames-1, one action per transition)")
     p.add_argument("--frames", type=int, default=None, help="defaults to the clip's own count")
     p.add_argument("--fps", type=int, default=20, help="must match the source episode")
     p.add_argument("--size", default="832x480")
@@ -283,6 +286,11 @@ def main():
             "action_mode": args.mode,
             "raw_action_dim": args.raw_action_dim,
             "action_fps": args.fps,
+            # action.py rejects anything else outright:
+            #   "action_chunk_size must equal num_frames - 1 or num_frames".
+            # n-1 is one action per transition between frames, which is what
+            # inverse dynamics is recovering.
+            "action_chunk_size": args.chunk if args.chunk else n - 1,
         }
         if args.domain_id is not None:
             extra["domain_id"] = args.domain_id
