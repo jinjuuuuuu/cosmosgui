@@ -152,7 +152,10 @@ Must be one of: ['dynamic', 'en_vanilla', 'en_recaption',
 
 Cosmos3가 실제로 읽는 키는 아래가 전부다.
 
-| 키 | 쓰임 | 우리가 쓰나 |
+아래 표의 마지막 열은 **우리가 그 키를 요청에 넣느냐**이지, 그 기능이 동작하느냐가 아니다.
+`guardrails`가 특히 헷갈린다 — 그건 **끄는** 스위치라서, 안 보낸다는 것은 켜진 채로 둔다는 뜻이다.
+
+| 키 | 쓰임 | 우리가 보내나 |
 |---|---|---|
 | `depth` · `edge` · `seg` · `blur` · `wsm` | transfer 힌트 | ✅ Transfer 탭 |
 | `control_guidance` | 형태를 얼마나 붙잡을지 | ✅ |
@@ -160,7 +163,7 @@ Cosmos3가 실제로 읽는 키는 아래가 전부다.
 | `num_video_frames_per_chunk` · `max_frames` | 청크 크기와 총 길이 | ✅ |
 | `use_resolution_template` · `use_duration_template` | 서버의 해상도·길이 템플릿 덮어쓰기 방지 | ✅ **읽힌다** |
 | `resolution` · `image_size` · `aspect_ratio` | 크기 결정 (`resolution` → `image_size` → 720 순) | 일부 |
-| `guardrails` | 요청 단위 가드레일 해제 | ❌ |
+| `guardrails` | 요청 단위 가드레일 **해제** | ❌ 안 보냄 → **가드레일은 켜진 상태** |
 | `guidance_interval` | guidance 적용 구간 | ❌ |
 | `domain_id` · `domain_name` | 도메인 조건 | ❌ |
 | `condition_frame_indexes_vision` · `condition_video_keep` | v2v 조건 프레임 선택 | ❌ |
@@ -179,7 +182,10 @@ Cosmos3가 실제로 읽는 키는 아래가 전부다.
 
 ## 가드레일
 
-기본으로 켜져 있다. 입력 쪽은 키워드 blocklist와 Aegis 판정, 출력 쪽은 영상 안전 분류기와
+**이 서버에서 켜져 있고, 실제로 동작한다.** 사람 얼굴이 들어간 이미지를 생성하면 얼굴에
+모자이크가 걸려 나온다(2026-08-11 확인). 우리는 끄는 키를 보내지 않으므로 기본값 그대로다.
+
+입력 쪽은 키워드 blocklist와 Aegis 판정, 출력 쪽은 영상 안전 분류기와
 얼굴 블러(RetinaFace, 20×20픽셀 넘는 검출을 모자이크)다.
 
 끄는 방법은 두 층이다(`cosmos3/guardrails.py`의 `is_guardrails_enabled`).
