@@ -44,27 +44,27 @@ History 탭은 서버를 부르지 않는다. 결과 폴더(`COSMOS_OUT_DIR`, �
 |---|---|
 | `n` | 생성 장수. **Cosmos3는 값과 무관하게 한 장만 만든다.** 1로 고정해 보낸다 |
 
-## 탭별로 실제 보내는 값
+## 탭별 요청 필드
 
-아래 표의 **서버 범위**는 `/openapi.json`에 선언된 최소·최대다. `없음`은 서버가 범위를
-정하지 않았다는 뜻으로, 아무 값이나 받는다는 것이지 아무 값이나 잘 동작한다는 뜻은 아니다.
-**GUI 범위**는 화면 슬라이더가 허용하는 폭이며 실용적으로 정한 값이다.
+**서버 범위**는 `/openapi.json`에 선언된 최소·최대다. `없음`은 서버가 범위를 정하지 않았다는
+뜻으로, 아무 값이나 받는다는 것이지 아무 값이나 잘 동작한다는 뜻은 아니다. 비고의 `GUI`는
+화면 슬라이더가 허용하는 폭이며 실용적으로 정한 값이다.
 
 ### Video 탭 → `POST /v1/videos/sync`
 
-| 필드 | 보내는 값 | 서버 범위 | GUI 범위 |
-|---|---|---|---|
-| `prompt` | 입력한 문장 | — | — |
-| `negative_prompt` | 입력했을 때만 | — | — |
-| `size` | `832x480` | 없음 | 832x480 · 1280x720 · 1024x1024 · 1920x1080 · Match source image |
-| `num_frames` | `57` | 없음 | 17 ~ 121 (4 단위) |
-| `fps` | `24` | 없음 | 8 ~ 30 |
-| `num_inference_steps` | `35` | 없음 | 10 ~ 60 |
-| `guidance_scale` | `6.0` | 없음 | 1.0 ~ 12.0 |
-| `flow_shift` | `10.0` | 없음 | 1.0 ~ 14.0 |
-| `seed` | `0` | 없음 | 자유 입력 |
-| `generate_sound` | `true` | — | 체크박스 |
-| `input_reference` | 올린 사진 (선택) | — | — |
+| 필드 | 서버 범위 | 비고 |
+|---|---|---|
+| `prompt` | — | 필수 |
+| `negative_prompt` | — | 비어 있으면 아예 보내지 않는다 |
+| `size` | 없음 | GUI: 832x480 · 1280x720 · 1024x1024 · 1920x1080 · Match source image |
+| `num_frames` | 없음 | GUI 17 ~ 121 (4 단위) |
+| `fps` | 없음 | GUI 8 ~ 30 |
+| `num_inference_steps` | 없음 | GUI 10 ~ 60 |
+| `guidance_scale` | 없음 | GUI 1.0 ~ 12.0 |
+| `flow_shift` | 없음 | GUI 1.0 ~ 14.0 |
+| `seed` | 없음 | 자유 입력 |
+| `generate_sound` | — | 체크박스. `"true"` / `"false"` 문자열로 보낸다 |
+| `input_reference` | — | 시작 이미지. 올렸을 때만 보낸다 |
 
 이 엔드포인트는 숫자 범위를 하나도 선언하지 않는다. 위 GUI 범위는 전부 우리가 정한 것이다.
 
@@ -75,16 +75,16 @@ History 탭은 서버를 부르지 않는다. 결과 폴더(`COSMOS_OUT_DIR`, �
 
 ### Image 탭 → `POST /v1/images/generations`
 
-| 필드 | 보내는 값 | 서버 범위 | GUI 범위 |
-|---|---|---|---|
-| `prompt` | 입력한 문장 | — | — |
-| `negative_prompt` | 입력했을 때만 | — | — |
-| `size` | `1280x720` | 없음 | 832x480 · 1280x720 · 1024x1024 · 1920x1080 |
-| `n` | `1` | 1 ~ 10 선언 — **Cosmos3는 무시하고 항상 1장** | 고정 |
-| `num_inference_steps` | `35` | **1 ~ 200** | 10 ~ 60 |
-| `guidance_scale` | `6.0` | **0 ~ 20** | 1.0 ~ 12.0 |
-| `flow_shift` | `3.0` | 없음 | 1.0 ~ 12.0 |
-| `seed` | `0` | 없음 | 자유 입력 |
+| 필드 | 서버 범위 | 비고 |
+|---|---|---|
+| `prompt` | — | 필수 |
+| `negative_prompt` | — | 비어 있으면 아예 보내지 않는다 |
+| `size` | 없음 | GUI: 832x480 · 1280x720 · 1024x1024 · 1920x1080 |
+| `n` | **1 ~ 10** | **Cosmos3는 이 값을 쓰지 않는다.** 올려도 한 장이라 `1`로 고정해 보낸다 |
+| `num_inference_steps` | **1 ~ 200** | GUI 10 ~ 60 |
+| `guidance_scale` | **0 ~ 20** | GUI 1.0 ~ 12.0 |
+| `flow_shift` | 없음 | GUI 1.0 ~ 12.0 |
+| `seed` | 없음 | 자유 입력 |
 
 이 엔드포인트만 범위를 선언한다. `num_inference_steps`와 `guidance_scale`은 **서버가 허용하는
 폭이 GUI보다 넓다** — 슬라이더가 좁게 잡혀 있는 것이지 서버가 막는 게 아니다. 반대로 `n`은
@@ -95,21 +95,20 @@ History 탭은 서버를 부르지 않는다. 결과 폴더(`COSMOS_OUT_DIR`, �
 ### Augment 탭 → `POST /v1/videos/sync`
 
 Video 탭과 같은 요청이다. 짧은 영상을 만든 뒤 프레임을 골라내 여러 장의 사진으로 쓴다.
+같은 엔드포인트이므로 서버가 선언한 범위는 여기서도 없다.
 
-Video 탭과 같은 엔드포인트이므로 서버가 선언한 범위는 여기서도 없다.
-
-| 필드 | 보내는 값 | GUI 범위 |
+| 필드 | 서버 범위 | 비고 |
 |---|---|---|
-| `prompt` | "무엇이 달라질지" 입력한 문장 | — |
-| `size` | `Match source image` | 올린 사진 비율을 따른다 |
-| `num_frames` | `장수 × 3`을 17~121로 자른 값 | 코드가 계산. 슬라이더 없음 |
-| `fps` | `24` | 고정 |
-| `num_inference_steps` | `20` | 10 ~ 60 |
-| `guidance_scale` | `6.0` | 1.0 ~ 12.0 |
-| `flow_shift` | `10.0` | 고정 |
-| `seed` | `0` | 자유 입력 |
-| `generate_sound` | `false` | 고정. 사진에는 소리가 필요 없다 |
-| `input_reference` | 올린 사진 (필수) | — |
+| `prompt` | — | "무엇이 달라질지" 적은 문장 |
+| `size` | 없음 | `Match source image` — 올린 사진 비율을 따른다 |
+| `num_frames` | 없음 | 슬라이더 없음. 골라낼 장수 × 3을 17~121로 잘라 보낸다 |
+| `fps` | 없음 | `24` 고정 |
+| `num_inference_steps` | 없음 | GUI 10 ~ 60 |
+| `guidance_scale` | 없음 | GUI 1.0 ~ 12.0 |
+| `flow_shift` | 없음 | `10.0` 고정 |
+| `seed` | 없음 | 자유 입력 |
+| `generate_sound` | — | `false` 고정. 사진에는 소리가 필요 없다 |
+| `input_reference` | — | 올린 사진. 필수 |
 
 화면의 **How many photos to keep**(2~16, 기본 8)는 서버로 가지 않는다. 돌아온 영상에서
 몇 장을 골라낼지를 정하는 값이다.
@@ -122,19 +121,19 @@ Video 탭과 같은 엔드포인트이므로 서버가 선언한 범위는 여�
 
 Video 탭과 같은 엔드포인트이므로 서버가 선언한 범위는 여기서도 없다.
 
-| 필드 | 보내는 값 | GUI 범위 |
+| 필드 | 서버 범위 | 비고 |
 |---|---|---|
-| `model` | `nvidia/Cosmos3-Nano` | 명시해서 보낸다 |
-| `prompt` | Target appearance에 적은 문장 | — |
-| `negative_prompt` | `blurry, distorted, low quality, jittery, deformed, warped geometry` | 기본값이 미리 채워져 있다 |
-| `size` | control 영상 크기를 16의 배수로 깎은 값 | **고를 수 없다** |
-| `num_frames` | control 영상의 실제 프레임 수 | **고를 수 없다** |
-| `fps` | `20` | 8 ~ 30 |
-| `num_inference_steps` | `35` | 10 ~ 60 |
-| `guidance_scale` | `3.0` | 1.0 ~ 12.0 |
-| `flow_shift` | `10.0` | 1.0 ~ 14.0 |
-| `seed` | `0` | 자유 입력 |
-| `generate_sound` | `false` | 고정 |
+| `model` | — | `nvidia/Cosmos3-Nano`를 명시해서 보낸다 |
+| `prompt` | — | Target appearance에 적은 문장 |
+| `negative_prompt` | — | `blurry, distorted, low quality, jittery, deformed, warped geometry`가 기본값으로 채워져 있다 |
+| `size` | 없음 | **고를 수 없다.** control 영상 크기를 16의 배수로 깎아 보낸다 |
+| `num_frames` | 없음 | **고를 수 없다.** control 영상의 실제 프레임 수를 세어 보낸다 |
+| `fps` | 없음 | GUI 8 ~ 30 |
+| `num_inference_steps` | 없음 | GUI 10 ~ 60 |
+| `guidance_scale` | 없음 | GUI 1.0 ~ 12.0 |
+| `flow_shift` | 없음 | GUI 1.0 ~ 14.0 |
+| `seed` | 없음 | 자유 입력 |
+| `generate_sound` | — | `false` 고정. transfer는 소리를 받지 않는다 |
 
 크기와 프레임 수를 고정하는 이유는, 결과 영상이 원래 에피소드의 동작 기록과 1:1로 맞아야
 하기 때문이다. 어느 한쪽이 달라지면 그 짝이 깨진다. `fps`도 원본 에피소드와 같아야 한다 —
@@ -146,18 +145,17 @@ Video 탭과 같은 엔드포인트이므로 서버가 선언한 범위는 여�
 **`extra_params`** (JSON 문자열로 직렬화해서 form에 넣는다)
 
 `extra_params`는 스키마상 그냥 문자열이라, 그 안의 키에는 **선언된 범위라는 것이 없다.**
-아래 괄호 안은 GUI 슬라이더 범위다.
 
-| 키 | 보내는 값 | 뜻 |
+| 키 | 뜻 | 비고 |
 |---|---|---|
-| `depth` / `edge` / `seg` / `blur` / `wsm` | `{"control_path": "서버가 읽을 경로"}` | control 영상의 종류. 화면 라디오로 고른 하나 |
-| `control_guidance` | `1.5` (GUI 0.5 ~ 4.0) | 원본의 형태를 얼마나 단단히 붙잡을지 |
-| `num_conditional_frames` | `1` (GUI 1 ~ 16) | 다음 청크가 이전 청크를 몇 프레임 보고 시작할지 |
-| `num_video_frames_per_chunk` | `121` (GUI 17 ~ 121) | 한 번에 생성하는 청크 크기 |
-| `max_frames` | control 영상의 프레임 수 | 총 길이 상한 |
-| `resolution` | control 영상 높이를 16의 배수로 깎은 값 | 생성 해상도 기준 |
-| `use_resolution_template` | `false` | 서버가 자기 해상도 템플릿으로 덮어쓰지 못하게 |
-| `use_duration_template` | `false` | 서버가 자기 길이 템플릿으로 덮어쓰지 못하게 |
+| `depth` / `edge` / `seg` / `blur` / `wsm` | control 영상의 종류 | 화면 라디오로 고른 하나에 `{"control_path": "서버가 읽을 경로"}` |
+| `control_guidance` | 원본의 형태를 얼마나 단단히 붙잡을지 | GUI 0.5 ~ 4.0 |
+| `num_conditional_frames` | 다음 청크가 이전 청크를 몇 프레임 보고 시작할지 | GUI 1 ~ 16 |
+| `num_video_frames_per_chunk` | 한 번에 생성하는 청크 크기 | GUI 17 ~ 121 |
+| `max_frames` | 총 길이 상한 | control 영상의 프레임 수를 보낸다 |
+| `resolution` | 생성 해상도 기준 | control 영상 높이를 16의 배수로 깎아 보낸다 |
+| `use_resolution_template` | 서버가 자기 해상도 템플릿으로 덮어쓰지 못하게 | `false` 고정 |
+| `use_duration_template` | 서버가 자기 길이 템플릿으로 덮어쓰지 못하게 | `false` 고정 |
 
 화면의 **extra_params overrides** 칸에 JSON을 넣으면 위 값들 위에 덮어써서 보낸다.
 
