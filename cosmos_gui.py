@@ -846,9 +846,15 @@ with gr.Blocks(title="Cosmos 3") as app:
                     placeholder="A warehouse robot arm picking up a blue box, industrial lighting.",
                 )
                 i_negative = gr.Textbox(label="Negative prompt", lines=2)
-                i_size = gr.Dropdown(SIZES, value="1280x720", label="Resolution")
-                i_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
-                i_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
+                # Cosmos3 keeps a separate set of defaults per mode, and the
+                # image ones are not the video ones. From the pipeline in the
+                # container (COSMOS3_T2I_DEFAULT_*): 1024x1024, 50 steps,
+                # guidance 7.0, flow_shift 3.0. Whatever we send wins over
+                # those, so sending the video numbers here quietly opted out
+                # of the tuning that ships with the model.
+                i_size = gr.Dropdown(SIZES, value="1024x1024", label="Resolution")
+                i_steps = gr.Slider(10, 60, value=50, step=1, label="Sampling steps")
+                i_guidance = gr.Slider(1.0, 12.0, value=7.0, step=0.5, label="Guidance scale")
                 i_shift = gr.Slider(1.0, 12.0, value=3.0, step=0.5, label="Flow shift (3.0 for images)")
                 i_seed = gr.Number(value=0, precision=0, label="Seed")
                 i_go = gr.Button("Generate image", variant="primary")
