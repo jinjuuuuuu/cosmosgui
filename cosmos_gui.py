@@ -126,9 +126,6 @@ def recent_choices(limit=40):
         if not p.endswith(".json")
         and "_input." not in os.path.basename(p)
         and "_frame" not in os.path.basename(p)
-        # n>1 on the image endpoint returns siblings of one run; only the
-        # first carries the metadata, so the rest stay out of the list.
-        and "_alt" not in os.path.basename(p)
     ]
     files.sort(key=os.path.getmtime, reverse=True)
     choices = []
@@ -229,16 +226,18 @@ def server_seconds(r):
 
 
 def make_image(prompt, negative, size, steps, guidance, flow_shift, seed,
-               count, system_prompt):
+               system_prompt):
     if not prompt.strip():
         return None, "Enter a prompt first."
-    count = int(count)
     payload = {
         "prompt": prompt,
         "size": size,
-        # The schema caps this at 10. One request for ten samples beats ten
-        # requests: the queue is serial, so each round trip costs a full wait.
-        "n": count,
+        # The schema advertises 1-10, but this build only ever returns one:
+        # the cosmos3 pipeline has no num_images_per_prompt, unlike the
+        # flux2_klein and glm_image ones in the same container. Asking for
+        # more was silently answered with one, so the field stays at 1 and
+        # the tab no longer offers a control that does nothing.
+        "n": 1,
         "num_inference_steps": int(steps),
         "guidance_scale": float(guidance),
         "flow_shift": float(flow_shift),
@@ -260,31 +259,21 @@ def make_image(prompt, negative, size, steps, guidance, flow_shift, seed,
         return None, explain_error(r, IMAGE_PATH)
 
     try:
-        data = r.json()["data"]
-        imgs = [Image.open(io.BytesIO(base64.b64decode(d["b64_json"]))) for d in data]
-    except (KeyError, IndexError, TypeError, ValueError):
+        b64 = r.json()["data"][0]["b64_json"]
+    except (KeyError, IndexError, ValueError):
         return None, f"Unexpected response shape:\n{r.text[:1500]}"
-    if not imgs:
-        return None, "The server returned no images."
 
+    img = Image.open(io.BytesIO(base64.b64decode(b64)))
     took = time.monotonic() - t0
     served = server_seconds(r)
 
-    # The first file is the run; the rest are its siblings and are kept out of
-    # the History list by the _alt tag.
-    stem = os.path.join(OUT_DIR, f"cosmos_img_{int(time.time())}_{int(seed)}")
-    paths = []
-    for i, img in enumerate(imgs):
-        p = f"{stem}.png" if i == 0 else f"{stem}_alt{i + 1:02d}.png"
-        img.save(p)
-        paths.append(p)
-
-    save_meta(paths[0], {
+    path = os.path.join(OUT_DIR, f"cosmos_img_{int(time.time())}_{int(seed)}.png")
+    img.save(path)
+    save_meta(path, {
         "kind": "image",
         "prompt": prompt,
         "negative_prompt": negative.strip() or None,
         "size": size,
-        "n": len(imgs),
         "use_system_prompt": payload.get("use_system_prompt"),
         "num_inference_steps": int(steps),
         "guidance_scale": float(guidance),
@@ -295,11 +284,9 @@ def make_image(prompt, negative, size, steps, guidance, flow_shift, seed,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
     timing = f"{served:.0f}s on the GPU ({took:.0f}s total)" if served else f"{took:.0f}s"
-    first = imgs[0]
-    note = "" if len(imgs) == count else f" (asked for {count}, got {len(imgs)})"
-    return paths, (
-        f"Done in {timing}. {len(imgs)} image(s){note}, {first.width}x{first.height}, "
-        f"seed {int(seed)}.\nSaved to {paths[0]}"
+    return img, (
+        f"Done in {timing}. {img.width}x{img.height}, seed {int(seed)}.\n"
+        f"Saved to {path}"
     )
 
 
@@ -864,11 +851,6 @@ with gr.Blocks(title="Cosmos 3") as app:
                     placeholder="A warehouse robot arm picking up a blue box, industrial lighting.",
                 )
                 i_negative = gr.Textbox(label="Negative prompt", lines=2)
-                i_count = gr.Slider(
-                    1, 10, value=1, step=1,
-                    label="How many images (n)",
-                    info="One request, several samples. The queue is serial, so "
-                         "this is much faster than pressing the button n times.")
                 i_system = gr.Dropdown(
                     SYSTEM_PROMPTS, value=SYSTEM_PROMPT_DEFAULT,
                     label="Prompt rewriting (use_system_prompt)",
@@ -882,14 +864,13 @@ with gr.Blocks(title="Cosmos 3") as app:
                 i_seed = gr.Number(value=0, precision=0, label="Seed")
                 i_go = gr.Button("Generate image", variant="primary")
             with gr.Column():
-                # A gallery rather than a single image, because n can be >1.
-                i_out = gr.Gallery(label="Result", columns=2, height=430)
+                i_out = gr.Image(label="Result", type="pil", interactive=False)
                 i_log = gr.Textbox(label="Status", lines=6, interactive=False)
 
         i_event = i_go.click(
             make_image,
             inputs=[i_prompt, i_negative, i_size, i_steps, i_guidance, i_shift,
-                    i_seed, i_count, i_system],
+                    i_seed, i_system],
             outputs=[i_out, i_log],
             concurrency_id="gpu",
         )
