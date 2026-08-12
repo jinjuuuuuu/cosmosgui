@@ -99,8 +99,8 @@ def upload_field(name, path):
 def keep_input(out_path, src):
     """Copy the uploaded image next to the result.
 
-    An augmented image is meaningless without the original beside it, and the
-    Gradio upload lives in a temp dir that is cleared on restart.
+    A generated clip is hard to judge without the photo it started from, and
+    the Gradio upload lives in a temp dir that is cleared on restart.
     """
     if not src or not os.path.exists(src):
         return None
@@ -322,8 +322,8 @@ def fit_size(path, fallback="832x480", budget=832 * 480, step=16, cap=1920):
 def post_video(form, start_image):
     """POST the video endpoint. Returns (mp4 bytes, gpu seconds, error text).
 
-    Shared by the Video tab and the Augment tab — both are the same request,
-    they only differ in what they do with the frames that come back.
+    Used by the Video tab. The start image, when there is one, goes up as a
+    real multipart upload even though the schema declares the field a string.
     """
     # A list of tuples rather than a dict, because an uploaded file and the
     # plain text fields have to travel in the same multipart body.
@@ -410,88 +410,6 @@ def make_video(prompt, negative, size, num_frames, fps, steps, guidance, flow_sh
     return path, (
         f"Done in {timing} ({mode}). {int(num_frames)} frames at {fps}fps, {size}, "
         f"seed {int(seed)}.\nSaved to {path}"
-    )
-
-
-def augment_image(source, prompt, size, count, steps, guidance, seed):
-    """One photo in, several varied photos out.
-
-    Cosmos3-Nano has no image-to-image path, but it does have image-to-video.
-    So we generate a short clip starting from the uploaded photo and keep
-    evenly spaced frames — each one is the same scene a moment later, which is
-    exactly the variation we want for building a training set.
-    """
-    if not source:
-        return None, "Upload an image first."
-    if not prompt.strip():
-        return None, "Describe the variation you want."
-    try:
-        import imageio.v3 as iio
-    except ImportError:
-        return None, ("Frame extraction needs imageio.\n"
-                      "  pip install imageio imageio-ffmpeg")
-
-    if size == MATCH_SOURCE:
-        size = fit_size(source)
-    count = int(count)
-    # Ask for more frames than we keep so the samples are spread out, and stay
-    # inside the range the Video tab already proved works.
-    n_frames = max(17, min(121, count * 3))
-
-    form = {
-        "prompt": prompt,
-        "size": size,
-        "num_frames": str(n_frames),
-        "fps": "24",
-        "num_inference_steps": str(int(steps)),
-        "guidance_scale": str(float(guidance)),
-        "flow_shift": "10.0",
-        "seed": str(int(seed)),
-        "generate_sound": "false",   # nothing here needs audio
-    }
-
-    t0 = time.monotonic()
-    content, served, err = post_video(form, source)
-    if err:
-        return None, err
-
-    stem = os.path.join(OUT_DIR, f"cosmos_aug_{int(time.time())}_{int(seed)}")
-    mp4 = stem + ".mp4"
-    with open(mp4, "wb") as f:
-        f.write(content)
-
-    frames = list(iio.imiter(mp4))
-    if not frames:
-        return None, "The clip came back empty — nothing to extract."
-    step = max(1, len(frames) // count)
-    picked = frames[::step][:count]
-
-    out = []
-    for i, fr in enumerate(picked, 1):
-        p = f"{stem}_frame{i:02d}.png"
-        Image.fromarray(fr).save(p)
-        out.append(p)
-
-    took = time.monotonic() - t0
-    kept = keep_input(mp4, source)
-    save_meta(mp4, {
-        "kind": "image augmentation",
-        "prompt": prompt,
-        "source_image": os.path.basename(kept) if kept else None,
-        "size": size,
-        "frames_generated": len(frames),
-        "frames_kept": len(out),
-        "num_inference_steps": int(steps),
-        "guidance_scale": float(guidance),
-        "seed": int(seed),
-        "gpu_seconds": round(served, 1) if served else None,
-        "round_trip_seconds": round(took, 1),
-        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    timing = f"{served:.0f}s on the GPU ({took:.0f}s total)" if served else f"{took:.0f}s"
-    return out, (
-        f"Done in {timing}. {len(out)} variations from {len(frames)} frames, {size}.\n"
-        f"Saved to {stem}_frame01..{len(out):02d}.png"
     )
 
 
@@ -598,9 +516,10 @@ def transfer_video(control, prompt, negative, control_type, control_guidance, fp
                    chunk, cond_frames, steps, guidance, flow_shift, seed, extra_json):
     """Control-conditioned augmentation: a depth/edge/seg clip in, an RGB clip out.
 
-    Unlike the Augment tab this keeps the geometry *and* the timing of the source
-    episode, so the original action labels stay valid — which is the whole point
-    when the output goes back into a policy training set.
+    This is the augmentation path NVIDIA documents for Cosmos. It keeps the
+    geometry *and* the timing of the source episode, so the original action
+    labels stay valid — which is the whole point when the output goes back into
+    a policy training set.
 
     The control clip is not uploaded. It is named by path inside extra_params:
         extra_params={"depth": {"control_path": "/...", "control_weight": 1.0}, ...}
@@ -756,15 +675,6 @@ EXAMPLE_PROMPTS = [
     ["An automated forklift lifts a stack of cardboard boxes in a loading dock, morning sunlight through the open door."],
 ]
 
-# Variation instructions for the Augment tab. Each one keeps the scene and
-# changes a single thing, which is what makes the extracted frames useful.
-EXAMPLE_AUGS = [
-    ["The robot arm slowly moves closer to the blue box."],
-    ["The camera pans slowly to the right across the same scene."],
-    ["The forklift edges forward while everything else stays still."],
-    ["The scene stays put while the light shifts across the floor."],
-]
-
 # Transfer prompts describe the *look*, not the motion — the motion is already
 # fixed by the control video. Each of these changes lighting, surfaces and
 # background while leaving the task itself alone, which is what makes the
@@ -884,43 +794,6 @@ with gr.Blocks(title="Cosmos 3") as app:
             concurrency_id="gpu",
         )
 
-    with gr.Tab("Augment"):
-        gr.Markdown(
-            "One photo in, several varied photos out — the same scene a moment "
-            "later each time. Useful for building up a training set."
-        )
-        with gr.Row():
-            with gr.Column():
-                a_src = gr.Image(label="input_reference — source photo, required", type="filepath",
-                                 sources=["upload", "clipboard"], height=240)
-                a_prompt = gr.Textbox(
-                    label="prompt",
-                    lines=3,
-                    placeholder="The robot arm slowly moves closer to the blue box.",
-                    info="What should change in the scene.")
-                gr.Examples(label="Example instructions", examples=EXAMPLE_AUGS, inputs=[a_prompt])
-                a_count = gr.Slider(2, 16, value=8, step=1, label="how many photos to keep",
-                                    info="Not a server field. Picks this many frames out of the returned clip.")
-                a_size = gr.Dropdown(SIZES_WITH_MATCH, value=MATCH_SOURCE, label="size",
-                                     info="Match source image keeps the uploaded photo's aspect ratio.")
-                a_steps = gr.Slider(10, 60, value=20, step=1, label="num_inference_steps",
-                                    info="Diffusion steps. Lower than the other tabs on purpose.")
-                a_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="guidance_scale",
-                                       info="How strictly to follow the prompt.")
-                a_seed = gr.Number(value=0, precision=0, label="seed",
-                                   info="Same prompt and same seed give the same result.")
-                a_go = gr.Button("Generate variations", variant="primary")
-            with gr.Column():
-                a_out = gr.Gallery(label="Variations", columns=4, height=430)
-                a_log = gr.Textbox(label="Status", lines=5, interactive=False)
-
-        a_event = a_go.click(
-            augment_image,
-            inputs=[a_src, a_prompt, a_size, a_count, a_steps, a_guidance, a_seed],
-            outputs=[a_out, a_log],
-            concurrency_id="gpu",
-        )
-
     with gr.Tab("Transfer"):
         gr.Markdown(
             "Domain randomisation for an episode you already have. Upload the "
@@ -1023,7 +896,6 @@ with gr.Blocks(title="Cosmos 3") as app:
     refresh_history = lambda: gr.update(choices=recent_choices())
     v_event.then(refresh_history, outputs=h_pick)
     i_event.then(refresh_history, outputs=h_pick)
-    a_event.then(refresh_history, outputs=h_pick)
     x_event.then(refresh_history, outputs=h_pick)
 
     # Checked on every page load, not once at startup — otherwise everyone who
