@@ -797,30 +797,39 @@ with gr.Blocks(title="Cosmos 3") as app:
         with gr.Row():
             with gr.Column():
                 v_prompt = gr.Textbox(
-                    label="Prompt",
+                    label="prompt",
                     lines=4,
                     placeholder="A robot arm slowly picks up a blue box and moves it to the left.",
-                )
+                    info="What to make. The only field the server requires.")
                 gr.Examples(
                     label="Example prompts — click one to fill the box",
                     examples=EXAMPLE_PROMPTS,
                     inputs=[v_prompt],
                 )
                 v_start = gr.Image(
-                    label="Start image (optional) — leave empty for text to video",
+                    label="input_reference — start image, optional. Empty means text to video",
                     type="filepath",
                     sources=["upload", "clipboard"],
                     height=200,
                 )
-                v_negative = gr.Textbox(label="Negative prompt", lines=2)
-                v_size = gr.Dropdown(SIZES_WITH_MATCH, value="832x480", label="Resolution")
-                v_frames = gr.Slider(17, 121, value=57, step=4, label="Frames")
-                v_fps = gr.Slider(8, 30, value=24, step=1, label="FPS")
-                v_sound = gr.Checkbox(value=True, label="Generate sound (muxed into the mp4)")
-                v_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
-                v_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
-                v_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="Flow shift (10.0 for video)")
-                v_seed = gr.Number(value=0, precision=0, label="Seed")
+                v_negative = gr.Textbox(label="negative_prompt", lines=2,
+                                        info="What to avoid. Not sent at all when empty.")
+                v_size = gr.Dropdown(SIZES_WITH_MATCH, value="832x480", label="size",
+                                     info="Output WIDTHxHEIGHT.")
+                v_frames = gr.Slider(17, 121, value=57, step=4, label="num_frames",
+                                     info="Length in seconds = num_frames / fps.")
+                v_fps = gr.Slider(8, 30, value=24, step=1, label="fps",
+                                  info="Frames per second.")
+                v_sound = gr.Checkbox(value=True, label="generate_sound",
+                                      info="Makes matching sound and muxes it into the mp4.")
+                v_steps = gr.Slider(10, 60, value=35, step=1, label="num_inference_steps",
+                                    info="Diffusion steps. Higher is finer and slower.")
+                v_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="guidance_scale",
+                                       info="How strictly to follow the prompt.")
+                v_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="flow_shift",
+                                    info="Scheduler sigma shift. 10.0 is the video default.")
+                v_seed = gr.Number(value=0, precision=0, label="seed",
+                                   info="Same prompt and same seed give the same result.")
                 v_go = gr.Button("Generate video", variant="primary")
             with gr.Column():
                 v_out = gr.Video(label="Result")
@@ -841,22 +850,28 @@ with gr.Blocks(title="Cosmos 3") as app:
         with gr.Row():
             with gr.Column():
                 i_prompt = gr.Textbox(
-                    label="Prompt",
+                    label="prompt",
                     lines=4,
                     placeholder="A warehouse robot arm picking up a blue box, industrial lighting.",
-                )
-                i_negative = gr.Textbox(label="Negative prompt", lines=2)
+                    info="What to make. The only field the server requires.")
+                i_negative = gr.Textbox(label="negative_prompt", lines=2,
+                                        info="What to avoid. Not sent at all when empty.")
                 # Cosmos3 keeps a separate set of defaults per mode, and the
                 # image ones are not the video ones. From the pipeline in the
                 # container (COSMOS3_T2I_DEFAULT_*): 1024x1024, 50 steps,
                 # guidance 7.0, flow_shift 3.0. Whatever we send wins over
                 # those, so sending the video numbers here quietly opted out
                 # of the tuning that ships with the model.
-                i_size = gr.Dropdown(SIZES, value="1024x1024", label="Resolution")
-                i_steps = gr.Slider(10, 60, value=50, step=1, label="Sampling steps")
-                i_guidance = gr.Slider(1.0, 12.0, value=7.0, step=0.5, label="Guidance scale")
-                i_shift = gr.Slider(1.0, 12.0, value=3.0, step=0.5, label="Flow shift (3.0 for images)")
-                i_seed = gr.Number(value=0, precision=0, label="Seed")
+                i_size = gr.Dropdown(SIZES, value="1024x1024", label="size",
+                                     info="Output WIDTHxHEIGHT. The model's own T2I default is 1024x1024.")
+                i_steps = gr.Slider(10, 60, value=50, step=1, label="num_inference_steps",
+                                    info="Diffusion steps. The model's T2I default is 50.")
+                i_guidance = gr.Slider(1.0, 12.0, value=7.0, step=0.5, label="guidance_scale",
+                                       info="How strictly to follow the prompt. T2I default is 7.0.")
+                i_shift = gr.Slider(1.0, 12.0, value=3.0, step=0.5, label="flow_shift",
+                                    info="Scheduler sigma shift. 3.0 is the image default.")
+                i_seed = gr.Number(value=0, precision=0, label="seed",
+                                   info="Same prompt and same seed give the same result.")
                 i_go = gr.Button("Generate image", variant="primary")
             with gr.Column():
                 i_out = gr.Image(label="Result", type="pil", interactive=False)
@@ -876,19 +891,24 @@ with gr.Blocks(title="Cosmos 3") as app:
         )
         with gr.Row():
             with gr.Column():
-                a_src = gr.Image(label="Source photo", type="filepath",
+                a_src = gr.Image(label="input_reference — source photo, required", type="filepath",
                                  sources=["upload", "clipboard"], height=240)
                 a_prompt = gr.Textbox(
-                    label="What should change",
+                    label="prompt",
                     lines=3,
                     placeholder="The robot arm slowly moves closer to the blue box.",
-                )
+                    info="What should change in the scene.")
                 gr.Examples(label="Example instructions", examples=EXAMPLE_AUGS, inputs=[a_prompt])
-                a_count = gr.Slider(2, 16, value=8, step=1, label="How many photos to keep")
-                a_size = gr.Dropdown(SIZES_WITH_MATCH, value=MATCH_SOURCE, label="Resolution")
-                a_steps = gr.Slider(10, 60, value=20, step=1, label="Sampling steps")
-                a_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="Guidance scale")
-                a_seed = gr.Number(value=0, precision=0, label="Seed")
+                a_count = gr.Slider(2, 16, value=8, step=1, label="how many photos to keep",
+                                    info="Not a server field. Picks this many frames out of the returned clip.")
+                a_size = gr.Dropdown(SIZES_WITH_MATCH, value=MATCH_SOURCE, label="size",
+                                     info="Match source image keeps the uploaded photo's aspect ratio.")
+                a_steps = gr.Slider(10, 60, value=20, step=1, label="num_inference_steps",
+                                    info="Diffusion steps. Lower than the other tabs on purpose.")
+                a_guidance = gr.Slider(1.0, 12.0, value=6.0, step=0.5, label="guidance_scale",
+                                       info="How strictly to follow the prompt.")
+                a_seed = gr.Number(value=0, precision=0, label="seed",
+                                   info="Same prompt and same seed give the same result.")
                 a_go = gr.Button("Generate variations", variant="primary")
             with gr.Column():
                 a_out = gr.Gallery(label="Variations", columns=4, height=430)
@@ -917,44 +937,51 @@ with gr.Blocks(title="Cosmos 3") as app:
         )
         with gr.Row():
             with gr.Column():
-                x_ctrl = gr.Video(label="Control video (depth / edge / segmentation)")
+                x_ctrl = gr.Video(label="control_path — the depth / edge / segmentation clip")
                 x_type = gr.Radio(["depth", "edge", "seg", "blur", "wsm"],
-                                  value="depth", label="What kind of control is it")
+                                  value="depth", label="extra_params hint key",
+                                  info="Which kind of control the clip is. Becomes the key inside extra_params.")
                 x_prompt = gr.Textbox(
-                    label="Target appearance",
+                    label="prompt",
                     lines=5,
                     placeholder="A Franka Panda arm reaches down to a red cube "
                                 "lying on a polished concrete floor. Warm afternoon "
                                 "sunlight from a window on the left, brushed "
                                 "aluminium robot. Static third-person camera, "
                                 "photorealistic.",
-                )
+                    info="The look you want. Motion and geometry stay as they were.")
                 gr.Examples(label="Variation ideas — one per augmented copy",
                             examples=EXAMPLE_XFERS, inputs=[x_prompt])
                 x_negative = gr.Textbox(
-                    label="Negative prompt", lines=2,
+                    label="negative_prompt", lines=2,
                     value="blurry, distorted, low quality, jittery, deformed, warped geometry",
-                )
+                    info="What to avoid. Not sent at all when empty.")
                 x_cguidance = gr.Slider(
                     0.5, 4.0, value=1.5, step=0.1,
-                    label="Control guidance — how hard to hold the geometry (depth default 1.5)")
+                    label="control_guidance",
+                    info="How hard to hold the geometry. Depth default is 1.5.")
                 x_fps = gr.Slider(8, 30, value=20, step=1,
-                                  label="FPS — must match the source episode (ours is 20)")
+                                  label="fps",
+                                  info="Must match the source episode. Ours is 20.")
                 x_chunk = gr.Slider(17, 121, value=121, step=4,
-                                    label="Frames per chunk (121 measured cleaner than 93 here)")
+                                    label="num_video_frames_per_chunk",
+                                    info="121 measured cleaner than 93 here.")
                 x_cond = gr.Slider(
                     1, 16, value=1, step=1,
-                    label="Conditional frames per chunk — how much of the previous "
-                          "chunk the next one sees (server default 1)",
+                    label="num_conditional_frames",
                     info="The brightness step at a chunk boundary comes from this "
                          "being 1. Raising it is the lever to try.")
-                x_steps = gr.Slider(10, 60, value=35, step=1, label="Sampling steps")
+                x_steps = gr.Slider(10, 60, value=35, step=1, label="num_inference_steps",
+                                    info="Diffusion steps. Higher is finer and slower.")
                 x_guidance = gr.Slider(1.0, 12.0, value=3.0, step=0.5,
-                                       label="Guidance scale (transfer default is 3.0, not 6.0)")
-                x_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="Flow shift")
-                x_seed = gr.Number(value=0, precision=0, label="Seed")
+                                       label="guidance_scale",
+                                       info="The transfer default is 3.0, not the 6.0 the other tabs use.")
+                x_shift = gr.Slider(1.0, 14.0, value=10.0, step=0.5, label="flow_shift",
+                                    info="Scheduler sigma shift.")
+                x_seed = gr.Number(value=0, precision=0, label="seed",
+                                   info="Same prompt and same seed give the same result.")
                 x_extra = gr.Textbox(
-                    label="extra_params overrides (JSON, optional)",
+                    label="extra_params",
                     lines=2,
                     placeholder='{"guardrails": false}',
                     info="Merged over what this tab builds. The escape hatch for "
